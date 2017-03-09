@@ -1,0 +1,1 @@
+cmd_/home/isshe/Nutstore/Code/books/Linux就是这个范/chapter_15/first_time.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /home/isshe/Nutstore/Code/books/Linux就是这个范/chapter_15/first_time.ko /home/isshe/Nutstore/Code/books/Linux就是这个范/chapter_15/first_time.o /home/isshe/Nutstore/Code/books/Linux就是这个范/chapter_15/first_time.mod.o
