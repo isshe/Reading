@@ -92,7 +92,7 @@ loader_start:
 ; ax和cx中是以KB为单位的内存数量，将其转换为byte(B)为单位
     mov cx, 0x400   ; 1024
     mul cx          ; ax * cx, ax*16位，结果存在：高16位存在dx中，低16位存在ax中
-    shl edx, 16     ; 左移16位，把乘积的高16位移动到edx的高位（目的是把整个结果存在edx中）
+    shl edx, 16     ; 左移16位，把乘积的高16位移动到edx的高位（目的是把整个结果存在edx中），乘积的高16位在edx的低16位中
     and eax, 0x0000FFFF     ; 乘积低16位在eax的低16位中
     or edx, eax     ; 为什么不直接add？
     add edx, 0x100000   ;ax只是15MB,故要加1MB？？？！！！
