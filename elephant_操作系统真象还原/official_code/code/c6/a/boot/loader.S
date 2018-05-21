@@ -140,13 +140,13 @@ p_mode_start:
    mov ds, ax
    mov es, ax
    mov ss, ax
-   mov esp,LOADER_STACK_TOP
-   mov ax, SELECTOR_VIDEO
+   mov esp,LOADER_STACK_TOP         ; 0x900
+   mov ax, SELECTOR_VIDEO           ; 0x18 = 24
    mov gs, ax
 
 ; -------------------------   加载kernel  ----------------------
-   mov eax, KERNEL_START_SECTOR        ; kernel.bin所在的扇区号
-   mov ebx, KERNEL_BIN_BASE_ADDR       ; 从磁盘读出后，写入到ebx指定的地址
+   mov eax, KERNEL_START_SECTOR  ;9      ; kernel.bin所在的扇区号
+   mov ebx, KERNEL_BIN_BASE_ADDR ;0x70000      ; 从磁盘读出后，写入到ebx指定的地址
    mov ecx, 200			       ; 读入的扇区数
 
    call rd_disk_m_32
