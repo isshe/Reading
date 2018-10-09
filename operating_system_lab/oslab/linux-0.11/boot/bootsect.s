@@ -3,7 +3,7 @@
 ! 0x3000 is 0x30000 bytes = 196kB, more than enough for current
 ! versions of linux
 !
-SYSSIZE = 0x3000
+SYSSIZE = 0x3000 		! 0x3000 * 16 = 0x30000
 !
 !	bootsect.s		(C) 1991 Linus Torvalds
 !
@@ -97,7 +97,7 @@ go:	mov	ax,cs			! 将ds、es和ss都置成移动后代码所在的段处(0x9000)
 ! 在bootsect程序块后紧根着加载setup模块的代码数据。
 ! 注意es已经设置好了。（在移动代码时es已经指向目的段地址处0x9000）。
 ! 110--119行的用途是利用ROM BIOS中断INT 0x13 将setup 模块从磁盘第2个扇区开始读到
-! 0x90200 开始处，共读 4个扇区。
+! 内存0x90200 开始处，共读 4个扇区。
 ！[v0.12]在读操作过程中如果读出错，则显示磁盘上出错扇区位置，然后复位驱动器并重试，没有退路。
 ! INT 0x13读扇区使用调用参数设置如下：
 ! ah = 0x02 - 读磁盘扇区到内存；al = 需要读出的扇区数量；
@@ -121,45 +121,84 @@ load_setup:					! 加载setup程序
 ok_load_setup:
 
 ! Get disk drive parameters, specifically nr of sectors/track
-
-	mov	dl,#0x00
+! 这段代码取磁盘驱动器的参数，实际上是取每磁道扇区数，并保存在位置sectors处。
+! 取磁盘驱动器参数INT 0x13调用格式和返回信息如下：
+! ah = 0x08     dl = 驱动器号（如果是硬盘则要置位7为1）。
+! 返回信息：
+! 如果出错则CF置位，并且ah = 状态码。
+! ah = 0， al = 0，          bl = 驱动器类型（AT/PS2）
+! ch = 最大磁道号的低8位，  cl = 每磁道最大扇区数(位0-5)，最大磁道号高2位(位6-7)
+! dh = 最大磁头数，          dl = 驱动器数量，
+! es:di 软驱磁盘参数表。
+	mov	dl,#0x00		! 清零
 	mov	ax,#0x0800		! AH=8 is get drive parameters
 	int	0x13
-	mov	ch,#0x00
+	mov	ch,#0x00 		! 清零
+
+! 下面指令表示下一条语句的操作数在 cs段寄存器所指的段中。它只影响其下一条语句。实际
+! 上，由于本程序代码和数据都被设置处于同一个段中，即段寄存器cs和ds、es的值相同，因
+! 此本程序中此处可以不使用该指令。
+! 下句保存每磁道扇区数。对于软盘来说（dl=0），其最大磁道号不会超过256，ch已经足够表
+! 示它，因此cl的位6-7肯定为0。又146行已置ch=0，因此此时cx中是每磁道扇区数。
 	seg cs
-	mov	sectors,cx
+	mov	sectors,cx 		! 获取每磁道扇区数
 	mov	ax,#INITSEG
-	mov	es,ax
+	mov	es,ax			! 因为上面取磁盘参数中断改了es值，这里重新改回。
 
 ! Print some inane message
-
-	mov	ah,#0x03		! read cursor pos
-	xor	bh,bh
-	int	0x10
+! 显示信息：“Loading system ...”，共显示包括回车和换行控制字符在内的19（0x13）个字符。
+! BIOS中断0x10功能号 ah = 0x03，读光标位置。
+! 输入：bh = 页号
+! 返回：ch = 扫描开始线；cl = 扫描结束线；dh = 行号(0x00顶端)；dl = 列号(0x00最左边)。
+! BIOS中断0x10功能号 ah = 0x13，显示字符串。
+! 输入：al = 放置光标的方式及规定属性。0x01-表示使用bl中的属性值，光标停在字符串结尾处。
+! es:bp 此寄存器对指向要显示的字符串起始位置处。cx = 显示的字符串字符数。bh = 显示页面号；
+! bl = 字符属性。dh = 行号；dl = 列号。
+	mov	ah,#0x03		! read cursor pos，读取光标位置
+	xor	bh,bh			! 输入页号0
+	int	0x10			！0x10号终端0x03号子功能
 	
-	mov	cx,#24
+	mov	cx,#24			! 24字符？？？？
 	mov	bx,#0x0007		! page 0, attribute 7 (normal)
-	mov	bp,#msg1
+	mov	bp,#msg1		! es:bp指向要显示的字符串。
 	mov	ax,#0x1301		! write string, move cursor
-	int	0x10
+	int	0x10			! 写字符串并移动光标到串结尾处。
 
 ! ok, we've written the message, now
 ! we want to load the system (at 0x10000)
-
+! 现在开始将system模块加载到0x10000（64KB）开始处。
 	mov	ax,#SYSSEG
-	mov	es,ax		! segment of 0x010000
-	call	read_it
-	call	kill_motor
+	mov	es,ax			! segment of 0x010000，设置段基址
+	call	read_it		! 读磁盘上system模块，es为输入参数。
+	call	kill_motor	! 关闭驱动器马达，这样就可以知道驱动器的状态了。
 
 ! After that we check which root-device to use. If the device is
 ! defined (!= 0), nothing is done and the given device is used.
 ! Otherwise, either /dev/PS0 (2,28) or /dev/at0 (2,8), depending
 ! on the number of sectors that the BIOS reports currently.
+! 此后，我们检查要使用哪个根文件系统设备（简称根设备）。如果已经指定了设备(!=0)，
+! 就直接使用给定的设备。否则就需要根据BIOS报告的每磁道扇区数来确定到底使用/dev/PS0
+! (2,28)，还是 /dev/at0 (2,8)。
+!! 上面一行中两个设备文件的含义：
+!! 在Linux中软驱的主设备号是2(参见第43行的注释)，次设备号 = type*4 + nr，其中
+!! nr为0-3分别对应软驱A、B、C或D；type是软驱的类型（2->1.2MB或7->1.44MB等）。
+!! 因为7*4 + 0 = 28，所以 /dev/PS0 (2,28)指的是1.44MB A驱动器,其设备号是0x021c
+!! 同理 /dev/at0 (2,8)指的是1.2MB A驱动器，其设备号是0x0208。
 
+! 下面root_dev定义在引导扇区508，509字节处，指根文件系统所在设备号。0x0306指第2
+! 个硬盘第1个分区。这里默认为0x0306是因为当时 Linus 开发Linux系统时是在第2个硬
+! 盘第1个分区中存放根文件系统。这个值需要根据你自己根文件系统所在硬盘和分区进行修
+! 改。例如，如果你的根文件系统在第1个硬盘的第1个分区上，那么该值应该为0x0301，即
+! （0x01, 0x03）。如果根文件系统是在第2个Bochs软盘上，那么该值应该为0x021D，即
+! （0x1D,0x02）。当编译内核时，你可以在Makefile文件中另行指定你自己的值，内核映像
+! 文件Image的创建程序tools/build会使用你指定的值来设置你的根文件系统所在设备号。
 	seg cs
-	mov	ax,root_dev
+	mov	ax,root_dev		! 取508,509字节处的根设备号并判断是否已被定义。
 	cmp	ax,#0
 	jne	root_defined
+
+! 如果sectors=15则说明是1.2MB的驱动器；如果sectors=18，
+! 则说明是1.44MB软驱。因为是可引导的驱动器，所以肯定是A驱。
 	seg cs
 	mov	bx,sectors
 	mov	ax,#0x0208		! /dev/ps0 - 1.2Mb
@@ -169,7 +208,7 @@ ok_load_setup:
 	cmp	bx,#18
 	je	root_defined
 undef_root:
-	jmp undef_root
+	jmp undef_root 		! 死循环（死机）
 root_defined:
 	seg cs
 	mov	root_dev,ax
@@ -177,29 +216,50 @@ root_defined:
 ! after that (everyting loaded), we jump to
 ! the setup-routine loaded directly after
 ! the bootblock:
+! 到此，所有程序都加载完毕，我们就跳转到被加载在bootsect后面的setup程序去。
+! 下面段间跳转指令（Jump Intersegment）。跳转到0x9020:0000(setup.s程序开始处)去执行。
+	jmpi	0,SETUPSEG		!!!! 到此本程序就结束了。!!!!
 
-	jmpi	0,SETUPSEG
 
+! 下面是几个子程序。read_it用于读取磁盘上的system模块。kill_moter用于关闭软驱马达。
+! 还有一些屏幕显示子程序。
 ! This routine loads the system at address 0x10000, making sure
 ! no 64kB boundaries are crossed. We try to load it as fast as
 ! possible, loading whole tracks whenever we can.
 !
 ! in:	es - starting address segment (normally 0x1000)
 !
+! 该子程序将系统模块加载到内存地址0x10000处，并确定没有跨越64KB的内存边界。
+! 我们试图尽快地进行加载，只要可能，就每次加载整条磁道的数据。
+! 输入：es – 开始内存地址段值（通常是0x1000）
+!
+! 下面伪操作符.word定义一个2字节目标。相当于C语言程序中定义的变量和所占内存空间大小。
+! '1+SETUPLEN'表示开始时已经读进1个引导扇区和setup程序所占的扇区数SETUPLEN。
 sread:	.word 1+SETUPLEN	! sectors read of current track
 head:	.word 0			! current head
 track:	.word 0			! current track
 
 read_it:
+    ! 首先测试输入的段值。从盘上读入的数据必须存放在位于内存地址 64KB 的边界开始处，否则
+    ! 进入死循环。
+	! 清bx寄存器，用于表示当前段内存放数据的开始位置。
+    ! 153行上的指令test以比特位逻辑与两个操作数。若两个操作数对应的比特位都为1，则结果
+    ! 值的对应比特位为1，否则为0。该操作结果只影响标志（零标志ZF等）。例如若AX=0x1000，
+    ! 那么test指令的执行结果是(0x1000 & 0x0fff) = 0x0000，于是ZF标志置位。此时即下一条
+    ! 指令jne 条件不成立。
 	mov ax,es
 	test ax,#0x0fff
-die:	jne die			! es must be at 64kB boundary
+
+die:	
+	jne die			! es must be at 64kB boundary
 	xor bx,bx		! bx is starting address within segment
 rp_read:
+    ! 接着判断是否已经读入全部数据。比较当前所读段是否就是系统数据末端所处的段(#ENDSEG)，
+    ! 如果不是就跳转至下面ok1_read标号处继续读数据。否则退出子程序返回。
 	mov ax,es
 	cmp ax,#ENDSEG		! have we loaded all yet?
-	jb ok1_read
-	ret
+	jb ok1_read			! 没读完，继续读
+	ret					! 读完，退出
 ok1_read:
 	seg cs
 	mov ax,sectors
