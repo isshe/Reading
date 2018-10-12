@@ -11,8 +11,14 @@
 ! system to read them from there before the area is overwritten
 ! for buffer-blocks.
 !
+! setup.s负责从BIOS中获取系统数据，并将这些数据放到系统内存的适当
+! 地方。此时setup.s和system已经由bootsect引导块加载到内存中。
+! 这段代码询问bios有关内存/磁盘/其他参数，并将这些参数放到一个
+! “安全的”地方：0x90000-0x901FF，也即原来bootsect代码块曾经在
+! 的地方，然后在被缓冲块覆盖掉之前由保护模式的system读取。
 
 ! NOTE! These had better be the same as in bootsect.s!
+! 以下这些参数最好和bootsect.s中的相同！
 
 INITSEG  = 0x9000	! we move boot here - out of the way
 SYSSEG   = 0x1000	! system loaded at 0x10000 (65536).
@@ -32,44 +38,64 @@ start:
 
 ! ok, the read went well so we get current cursor position and save it for
 ! posterity.
-
+! ok，整个读磁盘过程都正常，现在将光标位置保存以备今后使用
+! 这段代码使用BIOS中断取屏幕当前光标位置（列、行），并保存在内存0x90000处（2字节）。
+! 控制台初始化程序会到此处读取该值。
+! BIOS中断0x10功能号 ah = 0x03，读光标位置。
+! 输入：bh = 页号
+! 返回：ch = 扫描开始线；cl = 扫描结束线；dh = 行号(0x00顶端)；dl = 列号(0x00最左边)。
 	mov	ax,#INITSEG	! this is done in bootsect already, but...
 	mov	ds,ax
-	mov	ah,#0x03	! read cursor pos
+	mov	ah,#0x03	! read cursor pos, 读光标位置
 	xor	bh,bh
 	int	0x10		! save it in known place, con_init fetches
 	mov	[0],dx		! it from 0x90000.
-! Get memory size (extended mem, kB)
 
+! Get memory size (extended mem, kB)
+! 获取内存大小
+! 取扩展内存的大小值（KB）。
+! 利用BIOS中断0x15 功能号ah = 0x88 取系统所含扩展内存大小并保存在内存0x90002处。
+! 返回：ax = 从0x100000（1M）处开始的扩展内存大小(KB)。若出错则CF置位，ax = 出错码。
 	mov	ah,#0x88
 	int	0x15
 	mov	[2],ax
 
 ! Get video-card data:
-
+! 下面这段用于取显示卡当前显示模式。
+! 调用BIOS中断0x10，功能号 ah = 0x0f
+! 返回：ah = 字符列数；al = 显示模式；bh = 当前显示页。
+! 0x90004(1字)存放当前页；0x90006存放显示模式；0x90007存放字符列数。
 	mov	ah,#0x0f
 	int	0x10
 	mov	[4],bx		! bh = display page
 	mov	[6],ax		! al = video mode, ah = window width
 
 ! check for EGA/VGA and some config parameters
-
+! 检查显示方式（EGA/VGA）并取参数。
+! 调用BIOS中断0x10，附加功能选择方式信息。功能号：ah = 0x12，bl = 0x10
+! 返回：bh =显示状态。0x00 -彩色模式，I/O端口=0x3dX；0x01 -单色模式，I/O端口=0x3bX。
+! bl = 安装的显示内存。0x00 - 64k；0x01 - 128k；0x02 - 192k；0x03 = 256k。
+! cx = 显示卡特性参数(参见程序后对BIOS视频中断0x10的说明)。
 	mov	ah,#0x12
 	mov	bl,#0x10
 	int	0x10
-	mov	[8],ax
+	mov	[8],ax			! ax此时是什么？
 	mov	[10],bx
 	mov	[12],cx
 
 ! Get hd0 data
-
+! 取第一个硬盘的信息（复制硬盘参数表）。
+! 第1个硬盘参数表的首地址竟然是中断向量0x41的向量值！而第2个硬盘参数表紧接在第1个
+! 表的后面，中断向量0x46的向量值也指向第2个硬盘的参数表首址。表的长度是16个字节。
+! 下面两段程序分别复制ROM BIOS中有关两个硬盘的参数表，0x90080处存放第1个硬盘的表，
+! 0x90090处存放第2个硬盘的表。
 	mov	ax,#0x0000
 	mov	ds,ax
-	lds	si,[4*0x41]
+	lds	si,[4*0x41]		! 取中断向量0x41的值，即hd0参数表的地址 ds:si
 	mov	ax,#INITSEG
 	mov	es,ax
-	mov	di,#0x0080
-	mov	cx,#0x10
+	mov	di,#0x0080		! 传输的目的地址: 0x9000:0x0080  es:di
+	mov	cx,#0x10		! 共传输16字节
 	rep
 	movsb
 
@@ -77,24 +103,28 @@ start:
 
 	mov	ax,#0x0000
 	mov	ds,ax
-	lds	si,[4*0x46]
+	lds	si,[4*0x46]		  ! 取中断向量0x46的值，即hd1参数表的地址 ds:si
 	mov	ax,#INITSEG
 	mov	es,ax
-	mov	di,#0x0090
+	mov	di,#0x0090			! 传输的目的地址: 0x9000:0x0090 es:di
 	mov	cx,#0x10
 	rep
 	movsb
 
 ! Check that there IS a hd1 :-)
-
-	mov	ax,#0x01500
-	mov	dl,#0x81
+! 检查系统是否有第2个硬盘。如果没有则把第2个表清零。
+! 利用BIOS中断调用0x13的取盘类型功能，功能号 ah = 0x15；
+! 输入：dl = 驱动器号（0x8X是硬盘：0x80指第1个硬盘，0x81第2个硬盘）
+! 输出：ah = 类型码；00 - 没有这个盘，CF置位；01 - 是软驱，没有change-line支持；
+!                    02 - 是软驱(或其他可移动设备)，有change-line支持； 03 - 是硬盘。
+	mov	ax,#0x01500		! ah = 0x15
+	mov	dl,#0x81		! 第二个硬盘
 	int	0x13
 	jc	no_disk1
-	cmp	ah,#3
+	cmp	ah,#3			! 是硬盘吗？(类型 = 3？)。
 	je	is_disk1
 no_disk1:
-	mov	ax,#INITSEG
+	mov	ax,#INITSEG		! 第2个硬盘不存在，则对第2个硬盘表清零。
 	mov	es,ax
 	mov	di,#0x0090
 	mov	cx,#0x10
@@ -104,8 +134,8 @@ no_disk1:
 is_disk1:
 
 ! now we want to move to protected mode ...
-
-	cli			! no interrupts allowed !
+! 现在我们要进入保护模式中了...
+	cli			! no interrupts allowed ! 不允许中断！关中断
 
 ! first we move the system to it's rightful place
 
