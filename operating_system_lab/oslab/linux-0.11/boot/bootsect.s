@@ -220,6 +220,7 @@ root_defined:
 ! 下面段间跳转指令（Jump Intersegment）。跳转到0x9020:0000(setup.s程序开始处)去执行。
 	jmpi	0,SETUPSEG		!!!! 到此本程序就结束了。!!!!
 
+!-----------------------------------------------------------------------
 
 ! 下面是几个子程序。read_it用于读取磁盘上的system模块。kill_moter用于关闭软驱马达。
 ! 还有一些屏幕显示子程序。
@@ -260,59 +261,70 @@ rp_read:
 	cmp ax,#ENDSEG		! have we loaded all yet?
 	jb ok1_read			! 没读完，继续读
 	ret					! 读完，退出
-ok1_read:
+ok1_read:	! ok1_read: 确定要读的字节数、扇区数
+    ! 然后计算和验证当前磁道需要读取的扇区数，放在ax寄存器中。
+    ! 根据当前磁道还未读取的扇区数以及段内数据字节开始偏移位置，计算如果全部读取这些未读
+    ! 扇区，所读总字节数是否会超过64KB段长度的限制。若会超过，则根据此次最多能读入的字节
+    ! 数 (64KB –段内偏移位置)，反算出此次需要读取的扇区数。
 	seg cs
-	mov ax,sectors
-	sub ax,sread
-	mov cx,ax
-	shl cx,#9
-	add cx,bx
-	jnc ok2_read
+	mov ax,sectors		! 取每磁道扇区数。
+	sub ax,sread 		! sread: 当前磁道已读入的扇区数
+	mov cx,ax			! cx = ax = 当前磁道未读扇区数。
+	shl cx,#9			! cx = cx * 512 字节 + 段内当前偏移值(bx)。
+	add cx,bx			! cx = 此次读操作后，段内共读入的字节数。
+	jnc ok2_read		! 若没有超过64KB字节，则跳转至ok2_read处执行。没有进位？！
 	je ok2_read
+    ! 若加上此次将读磁道上所有未读扇区时会超过64KB，则计算此时最多能读入的字节数：
+    ! (64KB–段内读偏移位置)，再转换成需读取的扇区数。其中0减某数就是取该数64KB的补值。
 	xor ax,ax
-	sub ax,bx
+	sub ax,bx			! 0减某数就是取该数64KB的补值
 	shr ax,#9
-ok2_read:
-	call read_track
-	mov cx,ax
-	add ax,sread
+ok2_read:	! 正式从磁盘读数据，并判断磁道、磁头数据
+    ! 读当前磁道上指定开始扇区（cl）和需读扇区数（al）的数据到 es:bx 开始处。然后统计当前
+    ! 磁道上已经读取的扇区数并与磁道最大扇区数 sectors作比较。如果小于sectors说明当前磁
+    ! 道上的还有扇区未读。于是跳转到ok3_read处继续操作。
+	call read_track		! 读当前磁道上指定开始扇区和需读扇区数的数据。
+	mov cx,ax			! cx = 该次操作已读取的扇区数。
+	add ax,sread		! 加上当前磁道上已经读取的扇区数。
 	seg cs
 	cmp ax,sectors
-	jne ok3_read
-	mov ax,#1
-	sub ax,head
-	jne ok4_read
-	inc track
-ok4_read:
-	mov head,ax
-	xor ax,ax
-ok3_read:
-	mov sread,ax
-	shl cx,#9
-	add bx,cx
-	jnc rp_read
-	mov ax,es
-	add ax,#0x1000
+	jne ok3_read		! 若当前磁道上的还有扇区未读，则跳转到ok3_read处。
+	mov ax,#1			! 若该磁道的当前磁头面所有扇区已经读取，则读该磁道的下一磁头面（1号磁头）上的数据。如果已经完成，则去读下一磁道。
+	sub ax,head			! 判断当前磁头号。如果是0磁头，则再去读1磁头面上的扇区数据。
+	jne ok4_read		! 检查ZF标记，为0标记，如果不为0，则不相等（head == 0，head != 1），就跳转
+	inc track			! 下一磁道
+ok4_read:	! 更新磁头
+	mov head,ax			! 保存当前磁头号。
+	xor ax,ax			! 清当前磁道已读扇区数。
+ok3_read:	! 来到这里意味着当前磁道上的还有未读扇区
+    ! 首先保存当前磁道已读扇区数，然后调整存放数据处的开
+    ! 始位置。若小于64KB边界值，则跳转到rp_read处，继续读数据。
+	mov sread,ax		! 更新已读的扇区数量
+	shl cx,#9			! 上次已读扇区数*512字节。
+	add bx,cx			! 调整当前段内数据开始位置。
+	jnc rp_read			! 没有进位，未读取到64KB数据
+	mov ax,es  		 	! 否则说明已经读取64KB数据。此时调整当前段，为读下一段数据作准备。
+	add ax,#0x1000		! 将段基址调整为指向下一个64KB内存开始处。
 	mov es,ax
 	xor bx,bx
 	jmp rp_read
 
 read_track:
-	push ax
+	push ax				! 以下几个保存环境
 	push bx
 	push cx
 	push dx
-	mov dx,track
-	mov cx,sread
-	inc cx
-	mov ch,dl
-	mov dx,head
-	mov dh,dl
-	mov dl,#0
-	and dx,#0x0100
-	mov ah,#2
+	mov dx,track		! 取当前磁道号。
+	mov cx,sread		! 取当前磁道上已读扇区数。
+	inc cx				! cl = 开始读扇区。
+	mov ch,dl			! ch = 当前磁道号。
+	mov dx,head			! 取当前磁头号。
+	mov dh,dl			! dh = 磁头号，dl = 驱动器号(为0表示当前A驱动器)。	
+	mov dl,#0			
+	and dx,#0x0100		! 磁头号不大于1。
+	mov ah,#2			! ah = 2，读磁盘扇区功能号。
 	int 0x13
-	jc bad_rt
+	jc bad_rt			! 若出错，则跳转至bad_rt；如果没错，就不管
 	pop dx
 	pop cx
 	pop bx
@@ -325,13 +337,23 @@ bad_rt:	mov ax,#0
 	pop cx
 	pop bx
 	pop ax
-	jmp read_track
+	jmp read_track		! 重试
 
 !/*
 ! * This procedure turns off the floppy drive motor, so
 ! * that we enter the kernel in a known state, and
 ! * don't have to worry about it later.
 ! */
+! 这个子程序用于关闭软驱的马达，这样我们进入内核后就能
+! 知道它所处的状态，以后也就无须担心它了。
+! 
+! 下面的值0x3f2是软盘控制器的一个端口，被称为数字输出寄存器（DOR）端口。它是
+! 一个8位的寄存器，
+! 位7--位4: 分别用于控制4个软驱（D--A）的启动和关闭。
+! 位3--位2: 用于允许/禁止DMA和中断请求以及启动/复位软盘控制器FDC。 
+! 位1--位0: 用于选择选择操作的软驱。
+! 第358行(mov al,#0)上在al中设置并输出的0值，就是用于选择A驱动器，关闭FDC，禁止DMA和中断请求，
+! 关闭马达。有关软驱控制卡编程的详细信息请参见kernel/blk_drv/floppy.c程序后面的说明。
 kill_motor:
 	push dx
 	mov dx,#0x3f2
