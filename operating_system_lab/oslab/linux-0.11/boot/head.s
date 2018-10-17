@@ -102,6 +102,8 @@ startup_32:					# 设置各个数据段寄存器。
 	call check_x87
 	jmp after_page_tables
 
+# ------------------------------------------------------------------------------
+
 /*
  * We depend on ET to be correct. This checks for 287/387.
  */
@@ -193,7 +195,17 @@ setup_gdt:
  * using 4 of them to span 16 Mb of physical memory. People with
  * more than 16MB will have to expand this.
  */
-.org 0x1000
+/* Linus将内核的内存页表直接放在页目录之后，使用了4个表来寻址16 MB的物理内存。
+* 如果你有多于16 Mb的内存，就需要在这里进行扩充修改。
+*/
+# 每个页表长为4 Kb字节（1页内存页面, =4kB），而每个页表项需要4个字节，因此一个页表共可以存放
+# 1024个表项。如果一个页表项寻址4 KB的地址空间，则一个页表就可以寻址4 MB的物理内存。
+# 页表项的格式为：项的前0-11位存放一些标志，例如是否在内存中(P位0)、读写许可(R/W位1)、
+# 普通用户还是超级用户使用(U/S位2)、是否修改过(是否脏了)(D位6)等；表项的位12-31是
+# 页框地址，用于指出一页内存的物理起始地址。
+
+# 这下面几句代码要怎么执行？？？？？？？？--------isshe----
+.org 0x1000			# 从偏移0x1000处开始是第1个页表（偏移0开始处将存放页表目录）。
 pg0:
 
 .org 0x2000
@@ -205,51 +217,68 @@ pg2:
 .org 0x4000
 pg3:
 
-.org 0x5000
+.org 0x5000			# 定义下面的内存数据块从偏移0x5000处开始。
+
 /*
  * tmp_floppy_area is used by the floppy-driver when DMA cannot
  * reach to a buffer-block. It needs to be aligned, so that it isn't
  * on a 64kB border.
  */
+/* 当DMA（直接存储器访问）不能访问缓冲块时，下面的tmp_floppy_area内存块
+* 就可供软盘驱动程序使用。其地址需要对齐调整，这样就不会跨越64KB边界。
+*/
 tmp_floppy_area:
-	.fill 1024,1,0
+	.fill 1024,1,0		# 共保留1024项，每项1字节，填充数值0。
 
+# 下面这几个入栈操作用于为跳转到init/main.c中的main()函数作准备工作。head.s
+# 会弹出main()的地址，并把控制权转移到init/main.c
+# 程序中。参见第3章中有关C函数调用机制的说明。
+# 前面3个入栈0值应该分别表示envp、argv指针和argc的值，但main()没有用到。
+# `pushl $L6`入栈操作是模拟调用main.c程序时首先将返回地址入栈的操作，所以如果
+# main.c程序真的退出时，就会返回到这里的标号L6处继续执行下去，也即死循环。
+# `pushl $main`将main.c的地址压入堆栈，这样，在设置分页处理（setup_paging）结束后
+# 执行'ret'返回指令时就会将main.c程序的地址弹出堆栈，并去执行main.c程序了。
+# 有关C函数调用机制请参见程序后的说明。
 after_page_tables:
 	pushl $0		# These are the parameters to main :-)
-	pushl $0
-	pushl $0
-	pushl $L6		# return address for main, if it decides to.
-	pushl $main
-	jmp setup_paging
+	pushl $0		# 这些是调用main程序的参数（指init/main.c）。
+	pushl $0		# 其中的'$'符号表示这是一个立即操作数。
+	pushl $L6		# return address for main, if it decides to. # 压入了返回地址
+	pushl $main		# 压入了main()函数代码的地址
+	jmp setup_paging		# 这个函数执行完以后，就会去执行main()
 L6:
 	jmp L6			# main should never return here, but
-				# just in case, we know what happens.
+					# just in case, we know what happens.
+					# main程序绝对不应该返回到这里。不过为了以防万一，
+					# 所以添加了该语句。这样我们就知道发生什么问题了。
 
 /* This is the default interrupt "handler" :-) */
+/* 下面是默认的中断“向量句柄”（中断处理程序）*/
+# 功能：打印下面的一条信息
 int_msg:
 	.asciz "Unknown interrupt\n\r"
-.align 2
+.align 2			# 按4字节方式对齐内存地址。
 ignore_int:
 	pushl %eax
 	pushl %ecx
 	pushl %edx
-	push %ds
-	push %es
+	push %ds		# 这里请注意！！ds,es,fs,gs等虽然是16位的寄存器，但入栈后
+	push %es		# 仍然会以32位的形式入栈，也即需要占用4个字节的堆栈空间。
 	push %fs
-	movl $0x10,%eax
+	movl $0x10,%eax	# 置段选择符（使ds,es,fs指向gdt表中的数据段）。
 	mov %ax,%ds
 	mov %ax,%es
 	mov %ax,%fs
-	pushl $int_msg
-	call printk
-	popl %eax
-	pop %fs
+	pushl $int_msg	# 把调用printk函数的参数指针（地址）入栈。注意！若int_msg
+	call printk		# 前不加'$'，则表示把int_msg符号处的长字（'Unkn'）入栈J。
+	popl %eax		# 该函数在/kernel/printk.c中。'_printk'是printk编译后模块中
+	pop %fs			# 的内部表示法。
 	pop %es
 	pop %ds
 	popl %edx
 	popl %ecx
 	popl %eax
-	iret
+	iret			# 中断返回（把中断调用时压入栈的CPU标志寄存器（32位）值也弹出）。
 
 
 /*
@@ -276,43 +305,96 @@ ignore_int:
  * some kind of marker at them (search for "16Mb"), but I
  * won't guarantee that's all :-( )
  */
+/*
+* 这个子程序通过设置控制寄存器cr0的标志（PG 位31）来启动对内存的分页处理功能，
+* 并设置各个页表项的内容，以恒等映射前16 MB的物理内存。分页器假定不会产生非法的
+* 地址映射（也即在只有4Mb的机器上设置出大于4Mb的内存地址）。
+* 注意！尽管所有的物理地址都应该由这个子程序进行恒等映射，但只有内核页面管理函数能
+* 直接使用>1Mb的地址。所有“普通”函数仅使用低于1Mb的地址空间，或者是使用局部数据
+* 空间，该地址空间将被映射到其他一些地方去 -- mm（内存管理程序）会管理这些事的。
+* 对于那些有多于16Mb内存的家伙 – 真是太幸运了，我还没有，为什么你会有。代码就在
+* 这里，对它进行修改吧。（实际上，这并不太困难的。通常只需修改一些常数等。我把它设置
+* 为16Mb，因为我的机器再怎么扩充甚至不能超过这个界限（当然，我的机器是很便宜的）。
+* 我已经通过设置某类标志来给出需要改动的地方（搜索“16Mb”），但我不能保证作这些
+* 改动就行了）。
+*/
+# 上面英文注释第2段的含义是指在机器物理内存中大于1MB的内存空间主要被用于主内存区。
+# 主内存区空间由mm模块管理。它涉及到页面映射操作。内核中所有其他函数就是这里指的一般
+# （普通）函数。若要使用主内存区的页面，就需要使用get_free_page()等函数获取。因为主内
+# 存区中内存页面是共享资源，必须有程序进行统一管理以避免资源争用和竞争。
+#
+# 在内存物理地址0x0处开始存放1页页目录表和4页页表。页目录表是系统所有进程公用的，而
+# 这里的4页页表则属于内核专用，它们一一映射线性地址起始16MB空间范围到物理内存上。对于
+# 新的进程，系统会在主内存区为其申请页面存放页表。另外，1页内存长度是4096字节。
+
 .align 2
 setup_paging:
-	movl $1024*5,%ecx		/* 5 pages - pg_dir+4 page tables */
+	movl $1024*5,%ecx		/* 5 pages - pg_dir+4 page tables */  	# 首先对5页内存（1页目录 + 4页页表）清零。
 	xorl %eax,%eax
-	xorl %edi,%edi			/* pg_dir is at 0x000 */
-	cld;rep;stosl
-	movl $pg0+7,pg_dir		/* set present bit/user r/w */
+	xorl %edi,%edi			/* pg_dir is at 0x000 */				# 页目录从0x000地址开始。
+	cld;rep;stosl													# eax内容存到es:edi所指内存位置处，且edi增4。
+
+    # 下面4句设置页目录表中的项，因为我们（内核）共有4个页表所以只需设置4项。	# ！！！！设置页表项
+    # 页目录项的结构与页表中项的结构一样，4个字节为1项。参见上面113行下的说明。
+    # 例如"$pg0+7"表示：0x00001007，是页目录表中的第1项。
+    # 则第1个页表所在的地址 = 0x00001007 & 0xfffff000 = 0x1000；
+    # 第1个页表的属性标志 = 0x00001007 & 0x00000fff = 0x07，表示该页存在、用户可读写。
+	movl $pg0+7,pg_dir			/* set present bit/user r/w */ 		# pg_dir 在最开头， 0x7,页存在并且可读写
 	movl $pg1+7,pg_dir+4		/*  --------- " " --------- */
 	movl $pg2+7,pg_dir+8		/*  --------- " " --------- */
 	movl $pg3+7,pg_dir+12		/*  --------- " " --------- */
-	movl $pg3+4092,%edi
+
+    # 下面6行填写4个页表中所有项的内容，共有：4(页表)*1024(项/页表)=4096项(0 - 0xfff)，
+    # 也即能映射物理内存 4096*4Kb = 16Mb。
+    # 每项的内容是：当前项所映射的物理内存地址 + 该页的标志（这里均为7）。
+    # 使用的方法是从最后一个页表的最后一项开始按倒退顺序填写。一个页表的最后一项在页表中的
+    # 位置是1023*4 = 4092。因此最后一页的最后一项的位置就是$pg3+4092。
+	movl $pg3+4092,%edi		# edi -> 最后一页的最后一项。
 	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
-	std
+							# 最后1项对应物理内存页面的地址是0xfff000，加上属性标志7，即为0xfff007。
+	std						# 方向位置位，edi值递减(4字节)。
 1:	stosl			/* fill pages backwards - more efficient :-) */
-	subl $0x1000,%eax
-	jge 1b
+	subl $0x1000,%eax		# 每填写好一项，物理地址值减0x1000（1页=4096KB）。 
+	jge 1b					# 如果小于0则说明全添写好了。
+
+	# 设置页目录表基址寄存器cr3的值，指向页目录表。cr3中保存的是页目录表的物理地址。
 	xorl %eax,%eax		/* pg_dir is at 0x0000 */
 	movl %eax,%cr3		/* cr3 - page directory start */
+
+	# 设置启动使用分页处理（cr0的PG标志，位31），先读后写
 	movl %cr0,%eax
-	orl $0x80000000,%eax
+	orl $0x80000000,%eax	# 添上PG标志。
 	movl %eax,%cr0		/* set paging (PG) bit */
 	ret			/* this also flushes prefetch-queue */
+# 在改变分页处理标志后要求使用转移指令刷新预取指令队列，这里用的是返回指令ret。
+# 该返回指令的另一个作用是将前面压入堆栈中的main程序的地址弹出，并跳转到/init/main.c
+# 程序去运行。本程序到此就真正结束了。
+
+# -----------------------------------------------------------------------------------
 
 .align 2
 .word 0
 idt_descr:
-	.word 256*8-1		# idt contains 256 entries
+	.word 256*8-1		# idt contains 256 entries # 共256项，限长=长度 - 1。
 	.long idt
 .align 2
 .word 0
+
+# 下面加载全局描述符表寄存器gdtr的指令lgdt要求的6字节操作数。前2字节是gdt表的限长，
+# 后4字节是gdt表的线性基地址。这里全局表长度设置为2KB字节（0x7ff即可），因为每8字节
+# 组成一个描述符项，所以表中共可有256项。符号_gdt是全局表在本程序中的偏移位置，见234行。
 gdt_descr:
 	.word 256*8-1		# so does gdt (not that that's any
 	.long gdt		# magic number, but it works for me :^)
 
-	.align 8
-idt:	.fill 256,8,0		# idt is uninitialized
+	.align 8				# 按8（2^3）字节方式对齐内存地址边界。(0.12里面这里是3，应该是这里错了？)
+idt:	.fill 256,8,0		# idt is uninitialized				 # 256项，每项8字节，填0。
 
+# 全局表。前4项分别是空项（不用）、代码段描述符、数据段描述符、系统调用段描述符，其中
+# 系统调用段描述符并没有派用处，Linus当时可能曾想把系统调用代码专门放在这个独立的段中。
+# 后面还预留了252项的空间，用于放置所创建任务的局部描述符(LDT)和对应的任务状态段TSS
+# 的描述符。
+# (0-nul, 1-cs, 2-ds, 3-syscall, 4-TSS0, 5-LDT0, 6-TSS1, 7-LDT1, 8-TSS2 etc...)
 gdt:	.quad 0x0000000000000000	/* NULL descriptor */
 	.quad 0x00c09a0000000fff	/* 16Mb */
 	.quad 0x00c0920000000fff	/* 16Mb */
