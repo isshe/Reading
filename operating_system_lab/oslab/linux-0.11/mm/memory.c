@@ -40,9 +40,10 @@ static inline volatile void oom(void)
 __asm__("movl %%eax,%%cr3"::"a" (0))
 
 /* these are not to be changed without changing head.s etc */
-#define LOW_MEM 0x100000
-#define PAGING_MEMORY (15*1024*1024)
-#define PAGING_PAGES (PAGING_MEMORY>>12)
+#define LOW_MEM 0x100000					// 0个数：5 * 4 = 20 = 1MB
+#define PAGING_MEMORY (15*1024*1024)		// 15Mb
+#define PAGING_PAGES (PAGING_MEMORY>>12)	//PAGING_PAGES被定义为(PAGING_MEMORY>>12)，即1MB
+											// 以上所有物理内存分页后的内存页面数(15MB/4KB = 3840)。
 #define MAP_NR(addr) (((addr)-LOW_MEM)>>12)
 #define USED 100
 
@@ -397,18 +398,41 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	oom();
 }
 
+// 物理内存管理初始化。
+// 该函数对1MB以上内存区域以页面为单位进行管理前的初始化设置工作。一个页面长度为
+// 4KB字节。该函数把 1MB以上所有物理内存划分成一个个页面，并使用一个页面映射字节
+// 数组mem_map[] 来管理所有这些页面。对于具有16MB内存容量的机器，该数组共有3840
+// 项 ((16MB - 1MB)/4KB)，即可管理3840个物理页面。每当一个物理内存页面被占用时就
+// 把 mem_map[]中对应的的字节值增1；若释放一个物理页面，就把对应字节值减1。 若字
+// 节值为 0，则表示对应页面空闲； 若字节值大于或等于1，则表示对应页面被占用或被不
+// 同程序共享占用。
+// 在该版本的 Linux内核中，最多能管理 16MB的物理内存，大于16MB的内存将弃置不用。
+// 对于具有16MB内存的PC机系统，在没有设置虚拟盘 RAMDISK的情况下 start_mem通常
+// 是4MB，end_mem是16MB。因此此时主内存区范围是4MB—16MB，共有3072个物理页面可
+// 供分配。而范围0 - 1MB内存空间用于内核系统（其实内核只使用0 —640Kb，剩下的部
+// 分被部分高速缓冲和设备内存占用）。
+// 参数start_mem是可用作页面分配的主内存区起始地址（已去除RAMDISK所占内存空间）。
+// end_mem是实际物理内存最大地址。而地址范围start_mem到end_mem是主内存区。
 void mem_init(long start_mem, long end_mem)
 {
 	int i;
 
-	HIGH_MEMORY = end_mem;
-	for (i=0 ; i<PAGING_PAGES ; i++)
+    // 首先将1MB到16MB范围内所有内存页面对应的内存映射字节数组项置为已占用状态，即各
+    // 项字节值全部设置成USED（100）。PAGING_PAGES被定义为(PAGING_MEMORY>>12)，即1MB
+    // 以上所有物理内存分页后的内存页面数(15MB/4KB = 3840)。
+	HIGH_MEMORY = end_mem;				// 设置内存最高端（16MB）。
+	for (i=0 ; i<PAGING_PAGES ; i++)	// 15MB/4KB
 		mem_map[i] = USED;
-	i = MAP_NR(start_mem);
+
+	// 然后计算主内存区起始内存 start_mem 处页面对应内存映射字节数组中项号i和主内存区
+    // 页面数。此时 mem_map[] 数组的第i项正对应主内存区中第1个页面。最后将主内存区中
+    // 页面对应的数组项清零（表示空闲）。对于具有16MB物理内存的系统，mem_map[] 中对应
+    // 4Mb--16Mb主内存区的项被清零。
+	i = MAP_NR(start_mem);				// 页为单位， // 主内存区起始位置处页面号。
 	end_mem -= start_mem;
-	end_mem >>= 12;
-	while (end_mem-->0)
-		mem_map[i++]=0;
+	end_mem >>= 12;						// 主内存区中的总页面数。
+	while (end_mem-->0)					// end_mem次，从i开始
+		mem_map[i++]=0;					// 主内存区页面对应字节值清零，注意这里 i 是++
 }
 
 void calc_mem(void)

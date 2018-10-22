@@ -135,52 +135,76 @@ static void time_init(void)
 	struct tm time;
 
 	do {
-		time.tm_sec = CMOS_READ(0);
-		time.tm_min = CMOS_READ(2);
-		time.tm_hour = CMOS_READ(4);
-		time.tm_mday = CMOS_READ(7);
-		time.tm_mon = CMOS_READ(8);
-		time.tm_year = CMOS_READ(9);
+		time.tm_sec = CMOS_READ(0);				/* 当前时间秒值（均是BCD码值）。*/
+		time.tm_min = CMOS_READ(2);				/* 当前分钟值。*/
+		time.tm_hour = CMOS_READ(4);			/* 当前小时值。*/
+		time.tm_mday = CMOS_READ(7);			/* 一月中的当天日期。*/
+		time.tm_mon = CMOS_READ(8);				/* 当前月份（1—12）。*/
+		time.tm_year = CMOS_READ(9);			/* 当前年份。*/
 	} while (time.tm_sec != CMOS_READ(0));
-	BCD_TO_BIN(time.tm_sec);
+	BCD_TO_BIN(time.tm_sec);					/* 转换成二进制数值。*/
 	BCD_TO_BIN(time.tm_min);
 	BCD_TO_BIN(time.tm_hour);
 	BCD_TO_BIN(time.tm_mday);
 	BCD_TO_BIN(time.tm_mon);
 	BCD_TO_BIN(time.tm_year);
-	time.tm_mon--;
-	startup_time = kernel_mktime(&time);
+	time.tm_mon--;								 /* tm_mon中月份范围是0—11。*/
+	startup_time = kernel_mktime(&time);		 /* 计算开机时间。kernel/mktime.c 41行。*/
 }
 
-static long memory_end = 0;
-static long buffer_memory_end = 0;
-static long main_memory_start = 0;
+static long memory_end = 0;						/* 机器具有的物理内存容量（字节数）。*/
+static long buffer_memory_end = 0;				/* 高速缓冲区末端地址。*/
+static long main_memory_start = 0;				/* 主内存（将用于分页）开始的位置。*/
 
-struct drive_info { char dummy[32]; } drive_info;
+struct drive_info { char dummy[32]; } drive_info;		// 用于存放硬盘参数表信息。
 
+// 内核初始化主程序。初始化结束后将以任务0（idle任务即空闲任务）的身份运行。
+// 英文注释含义是“这里确实是void，没错。在startup程序(head.s)中就是这样假设的”。参见
+// head.s程序第136行开始的几行代码。
 void main(void)		/* This really IS void, no error here. */
 {			/* The startup routine assumes (well, ...) this */
 /*
  * Interrupts are still disabled. Do necessary setups, then
  * enable them
  */
- 	ROOT_DEV = ORIG_ROOT_DEV;
- 	drive_info = DRIVE_INFO;
-	memory_end = (1<<20) + (EXT_MEM_K<<10);
-	memory_end &= 0xfffff000;
-	if (memory_end > 16*1024*1024)
+/*
+* 此时中断仍被禁止着，做完必要的设置后就将其开启。
+*/
+// 首先保存根文件系统设备号和交换文件设备号，并根据setup.s程序中获取的信息设置控制台
+// 终端屏幕行、列数环境变量TERM，并用其设置初始init进程中执行etc/rc文件和shell程序
+// 使用的环境变量，以及复制内存0x90080处的硬盘参数表。
+// 其中ROOT_DEV 已在前面包含进的include/linux/fs.h文件第206行上被声明为extern int，
+// 而SWAP_DEV在include/linux/mm.h文件内也作了相同声明。这里mm.h文件并没有显式地列在
+// 本程序前部，因为前面包含进的include/linux/sched.h文件中已经含有它。
+
+	ROOT_DEV = ORIG_ROOT_DEV;					// ROOT_DEV定义在fs/super.c，29行。
+	drive_info = DRIVE_INFO;					// 复制内存0x90080处的硬盘参数表。
+
+    // 接着根据机器物理内存容量设置高速缓冲区和主内存区的位置和范围。
+    // 高速缓存末端地址->buffer_memory_end；
+	// 机器内存容量->memory_end；
+    // 主内存开始地址->main_memory_start；
+	memory_end = (1<<20) + (EXT_MEM_K<<10);		// 内存大小=1Mb + 扩展内存(k)*1024字节。
+	memory_end &= 0xfffff000;					// 忽略不到4Kb（1页）的内存数。
+	if (memory_end > 16*1024*1024)				// 如果内存量超过16Mb，则按16Mb计。
 		memory_end = 16*1024*1024;
-	if (memory_end > 12*1024*1024) 
+	if (memory_end > 12*1024*1024) 				// 如果内存>12Mb，则设置缓冲区末端=4Mb
 		buffer_memory_end = 4*1024*1024;
-	else if (memory_end > 6*1024*1024)
+	else if (memory_end > 6*1024*1024) 			// 否则若内存>6Mb，则设置缓冲区末端=2Mb
 		buffer_memory_end = 2*1024*1024;
 	else
-		buffer_memory_end = 1*1024*1024;
-	main_memory_start = buffer_memory_end;
+		buffer_memory_end = 1*1024*1024;		// 否则则设置缓冲区末端=1Mb
+	main_memory_start = buffer_memory_end;		// 主内存起始位置 = 缓冲区末端。
+
+// 如果在Makefile文件中定义了内存虚拟盘符号RAMDISK，则初始化虚拟盘。此时主内存将减少。
+//参见kernel/blk_drv/ramdisk.c。
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
-	mem_init(main_memory_start,memory_end);
+
+    // 以下是内核进行所有方面的初始化工作。阅读时最好跟着调用的程序深入进去看，			!!!!!!!!!!!!!!!!!
+	//若实在看不下去了，就先放一放，继续看下一个初始化调用 -- 这是经验之谈 - -。
+	mem_init(main_memory_start,memory_end);		// 主内存区初始化。（mm/memory.c，399）
 	trap_init();
 	blk_dev_init();
 	chr_dev_init();
