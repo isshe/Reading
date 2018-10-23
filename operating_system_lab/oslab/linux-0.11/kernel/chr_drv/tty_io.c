@@ -102,10 +102,12 @@ struct tty_queue * table_list[]={
 	&tty_table[2].read_q, &tty_table[2].write_q
 	};
 
+// tty终端初始化函数。
+// 初始化所有终端缓冲队列，初始化串口终端和控制台终端。
 void tty_init(void)
 {
-	rs_init();
-	con_init();
+	rs_init();			// 异步串行通信初始化。
+	con_init();			// 控制终端初始化。
 }
 
 void tty_intr(struct tty_struct * tty, int mask)
@@ -345,6 +347,7 @@ void do_tty_interrupt(int tty)
 	copy_to_cooked(tty_table+tty);
 }
 
+// 字符设备初始化函数。空，为以后扩展做准备。
 void chr_dev_init(void)
 {
 }

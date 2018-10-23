@@ -19,6 +19,12 @@ __asm__ ("movl %%esp,%%eax\n\t" \
 
 #define iret() __asm__ ("iret"::)
 
+// 设置门描述符宏。
+// 根据参数中的中断或异常处理过程地址addr、门描述符类型type和特权级信息dpl，设置位于
+// 地址gate_addr处的门描述符。（注意：下面“偏移”值是相对于内核代码或数据段来说的）。
+// 参数：gate_addr -描述符地址；type -描述符类型域值；dpl -描述符特权级；addr -偏移地址。
+// %0 - (由dpl,type组合成的类型标志字)；%1 - (描述符低4字节地址)；
+// %2 - (描述符高4字节地址)；%3 - edx(程序偏移地址addr)；%4 - eax(高字中含有段选择符0x8)。
 #define _set_gate(gate_addr,type,dpl,addr) \
 __asm__ ("movw %%dx,%%ax\n\t" \
 	"movw %0,%%dx\n\t" \
@@ -30,6 +36,9 @@ __asm__ ("movw %%dx,%%ax\n\t" \
 	"o" (*(4+(char *) (gate_addr))), \
 	"d" ((char *) (addr)),"a" (0x00080000))
 
+// 设置中断门函数（自动屏蔽随后的中断）。
+// 参数：n：中断号；addr：中断程序偏移地址。
+// &idt[n]是中断描述符表中中断号n对应项的偏移值；中断描述符的类型是14，特权级是0。
 #define set_intr_gate(n,addr) \
 	_set_gate(&idt[n],14,0,addr)
 

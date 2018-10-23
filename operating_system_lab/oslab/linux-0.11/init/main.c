@@ -205,10 +205,10 @@ void main(void)		/* This really IS void, no error here. */
     // 以下是内核进行所有方面的初始化工作。阅读时最好跟着调用的程序深入进去看，			!!!!!!!!!!!!!!!!!
 	//若实在看不下去了，就先放一放，继续看下一个初始化调用 -- 这是经验之谈 - -。
 	mem_init(main_memory_start,memory_end);		// 主内存区初始化。（mm/memory.c，399）
-	trap_init();
-	blk_dev_init();
-	chr_dev_init();
-	tty_init();
+	trap_init();								// 陷阱门（硬件中断向量）初始化；设置各种向量及其对应的处理函数
+	blk_dev_init();								// 块设备初始化。
+	chr_dev_init();								// 字符设备初始化。
+	tty_init();									// tty初始化。
 	time_init();
 	sched_init();
 	buffer_init(buffer_memory_end);
