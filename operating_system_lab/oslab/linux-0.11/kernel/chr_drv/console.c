@@ -85,13 +85,14 @@ static void sysbeep(void);
 #define RESPONSE "\033[?1;2c"
 
 /* NOTE! gotoxy thinks x==video_num_columns is ok */
+/* 注意！gotoxy函数认为 x==video_num_columns 时是正确的 */
 static inline void gotoxy(unsigned int new_x,unsigned int new_y)
 {
 	if (new_x > video_num_columns || new_y >= video_num_lines)
 		return;
-	x=new_x;
-	y=new_y;
-	pos=origin + y*video_size_row + (x<<1);
+	x=new_x;											// 列
+	y=new_y;											// 行
+	pos=origin + y*video_size_row + (x<<1);				// 1列用2个字节表示，所以x<<1。
 }
 
 static inline void set_origin(void)
@@ -614,41 +615,68 @@ void con_write(struct tty_struct * tty)
  * Reads the information preserved by setup.s to determine the current display
  * type and sets everything accordingly.
  */
+
+/*
+* void con_init(void);
+*
+* 这个子程序初始化控制台中断，其他什么都不做。如果你想让屏幕干净的话，就使用
+* 适当的转义字符序列调用tty_write()函数。
+*
+* 读取setup.s程序保存的信息，用以确定当前显示器类型，并且设置所有相关参数。
+*/
 void con_init(void)
 {
 	register unsigned char a;
 	char *display_desc = "????";
 	char *display_ptr;
 
-	video_num_columns = ORIG_VIDEO_COLS;
-	video_size_row = video_num_columns * 2;
-	video_num_lines = ORIG_VIDEO_LINES;
-	video_page = ORIG_VIDEO_PAGE;
-	video_erase_char = 0x0720;
+	// 首先根据setup.s程序取得的系统硬件参数（见本程序第60--68行）初始化几个本函数专用
+	// 的静态全局变量。
+	video_num_columns = ORIG_VIDEO_COLS;			// 显示器显示字符列数。
+	video_size_row = video_num_columns * 2;			// 每行字符需使用的字节数。
+	video_num_lines = ORIG_VIDEO_LINES;				// 显示器显示字符行数。
+	video_page = ORIG_VIDEO_PAGE;					// 当前显示页面。
+	video_erase_char = 0x0720;						// 擦除字符（0x20是字符，0x07属性）。
 	
-	if (ORIG_VIDEO_MODE == 7)			/* Is this a monochrome display? */
+	// 然后根据显示模式是单色还是彩色分别设置所使用的 显示内存起始位置 以及 显示寄存器索引
+	// 端口号和显示寄存器数据端口号。如果获得的BIOS显示方式等于7，则表示是单色显示卡。
+	if (ORIG_VIDEO_MODE == 7)			/* Is this a monochrome display? */ 		// 单色显示
 	{
-		video_mem_start = 0xb0000;
-		video_port_reg = 0x3b4;
-		video_port_val = 0x3b5;
+		video_mem_start = 0xb0000;					// 设置单显映像内存起始地址。
+		video_port_reg = 0x3b4;						// 设置单显索引寄存器端口。
+		video_port_val = 0x3b5;						// 设置单显数据寄存器端口。
+
+		// 哪里调了中断？？？？？？？
+		// 接着我们根据BIOS中断int 0x10功能0x12获得的显示模式信息，判断显示卡是单色显示卡还是彩色显示卡。
+		//若使用上述中断功能所得到的BX寄存器返回值不等于0x10，则说明是EGA卡。因此初始显示类型为 EGA单色。
+		//虽然 EGA 卡上有较多显示内存，但在单色方式下最多只 能利用地址范围在0xb0000--0xb8000之间的显示内存。
+		// 然后置显示器描述字符串为'EGAm'。 并会在系统初始化期间显示器描述字符串将显示在屏幕的右上角。
+		// 注意，这里使用了bx在调用中断int 0x10前后是否被改变的方法来判断卡的类型。若BL在
+		// 中断调用后值被改变，表示显示卡支持Ah=12h功能调用，是EGA或后推出来的VGA等类型的
+		// 显示卡。若中断调用返回值未变，表示显示卡不支持这个功能，则说明是一般单色显示卡。
 		if ((ORIG_VIDEO_EGA_BX & 0xff) != 0x10)
 		{
-			video_type = VIDEO_TYPE_EGAM;
-			video_mem_end = 0xb8000;
-			display_desc = "EGAm";
+			video_type = VIDEO_TYPE_EGAM;			// 设置显示类型（EGA单色）。
+			video_mem_end = 0xb8000;				// 0xb0000--0xb8000
+			display_desc = "EGAm";					// 设置显示描述字符串。
 		}
 		else
 		{
-			video_type = VIDEO_TYPE_MDA;
-			video_mem_end	= 0xb2000;
+			video_type = VIDEO_TYPE_MDA;			// 设置显示类型(MDA单色)。
+			video_mem_end	= 0xb2000;				// 0xb0000--0xb2000
 			display_desc = "*MDA";
 		}
 	}
 	else								/* If not, it is color. */
 	{
+		// 如果显示方式不为7，说明是彩色显示卡。此时文本方式下所用显示内存起始地址为0xb8000；
+		// 显示控制索引寄存器端口地址为 0x3d4；数据寄存器端口地址为 0x3d5。
 		video_mem_start = 0xb8000;
 		video_port_reg	= 0x3d4;
 		video_port_val	= 0x3d5;
+
+		// 再判断显示卡类别。如果BX不等于0x10，则说明是EGA显示卡，此时共有32KB显示内存可用（0xb8000-0xc0000）。
+		// 否则说明是CGA显示卡，只能使用8KB显示内存（0xb8000-0xba000）。
 		if ((ORIG_VIDEO_EGA_BX & 0xff) != 0x10)
 		{
 			video_type = VIDEO_TYPE_EGAC;
@@ -663,9 +691,10 @@ void con_init(void)
 		}
 	}
 
-	/* Let the user known what kind of display driver we are using */
-	
-	display_ptr = ((char *)video_mem_start) + video_size_row - 8;
+	// 然后我们在屏幕的右上角显示描述字符串。采用的方法是直接将字符串写到显示内存的相应
+	// 位置处。首先将显示指针display_ptr指到屏幕第1行右端差4个字符处（每个字符需2个
+	// 字节，因此减8），然后循环复制字符串的字符，并且每复制1个字符都空开1个属性字节。
+	display_ptr = ((char *)video_mem_start) + video_size_row - 8; 		// 8字节
 	while (*display_desc)
 	{
 		*display_ptr++ = *display_desc++;
@@ -673,18 +702,26 @@ void con_init(void)
 	}
 	
 	/* Initialize the variables used for scrolling (mostly EGA/VGA)	*/
-	
-	origin	= video_mem_start;
-	scr_end	= video_mem_start + video_num_lines * video_size_row;
-	top	= 0;
+	/* 初始化用于滚屏的变量（主要用于EGA/VGA）*/
+	// 注意，此时当前虚拟控制台号currcons已被初始化位0。因此下面实际上是初始化0号虚拟控
+	// 制台的结构vc_cons[0]中的所有字段值。例如，这里符号origin在前面第115行上已被定义为
+	// vc_cons[0].vc_origin。下面首先设置0号控制台的默认滚屏开始内存位置 video_mem_start
+	// 和默认滚屏末行内存位置，实际上它们也就是0号控制台占用的部分显示内存区域。然后初始
+	// 设置0号虚拟控制台的其他属性和标志值。
+	origin	= video_mem_start;												// 快速滚屏操作起始内存位置。
+	scr_end	= video_mem_start + video_num_lines * video_size_row; 			// 快速滚屏操作末端内存位置。
+	top	= 0;																// 初始设置滚动时顶行行号和底行行号。
 	bottom	= video_num_lines;
 
+	// 在设置了0号控制台当前光标所在位置和光标对应的内存位置pos后，我们循环设置其余的几
+	// 个虚拟控制台结构的参数值。除了各自占用的显示内存开始和结束位置不同，它们的初始值基
+	// 本上都与0号控制台相同。
 	gotoxy(ORIG_X,ORIG_Y);
-	set_trap_gate(0x21,&keyboard_interrupt);
-	outb_p(inb_p(0x21)&0xfd,0x21);
-	a=inb_p(0x61);
-	outb_p(a|0x80,0x61);
-	outb(a,0x61);
+	set_trap_gate(0x21,&keyboard_interrupt);			// 参见system.h，第36行开始。
+	outb_p(inb_p(0x21)&0xfd,0x21);					 	// 取消对键盘中断的屏蔽，允许IRQ1。
+	a=inb_p(0x61);										// 读取键盘端口0x61（8255A端口PB）。
+	outb_p(a|0x80,0x61);								// 设置禁止键盘工作（位7置位），
+	outb(a,0x61);										// 再允许键盘工作，**复位键盘**。
 }
 /* from bsd-net-2: */
 
