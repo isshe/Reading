@@ -209,9 +209,9 @@ void main(void)		/* This really IS void, no error here. */
 	blk_dev_init();								// 块设备初始化。
 	chr_dev_init();								// 字符设备初始化。
 	tty_init();									// tty初始化。
-	time_init();
-	sched_init();
-	buffer_init(buffer_memory_end);
+	time_init();								// 时间初始化，就设置了一下开机时间，函数在本文件上面
+	sched_init();								// 内核调度程序的初始化子程序。设置TSS LDT之类的
+	buffer_init(buffer_memory_end);				// 缓冲区初始化函数。
 	hd_init();
 	floppy_init();
 	sti();

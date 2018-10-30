@@ -38,15 +38,15 @@ __asm__ ("movw %%dx,%%ax\n\t" \
 
 // 设置中断门函数（自动屏蔽随后的中断）。
 // 参数：n：中断号；addr：中断程序偏移地址。
-// &idt[n]是中断描述符表中中断号n对应项的偏移值；中断描述符的类型是14，特权级是0。
+// &idt[n]是中断描述符表中中断号n对应项的偏移值；中断描述符的类型是14，特权级是0。（类型是什么意思？？？----isshe）
 #define set_intr_gate(n,addr) \
 	_set_gate(&idt[n],14,0,addr)
 
 #define set_trap_gate(n,addr) \
-	_set_gate(&idt[n],15,0,addr)
+	_set_gate(&idt[n],15,0,addr)			// 特权级是0
 
 #define set_system_gate(n,addr) \
-	_set_gate(&idt[n],15,3,addr)
+	_set_gate(&idt[n],15,3,addr) 			// 特权级是3
 
 #define _set_seg_desc(gate_addr,type,dpl,base,limit) {\
 	*(gate_addr) = ((base) & 0xff000000) | \
