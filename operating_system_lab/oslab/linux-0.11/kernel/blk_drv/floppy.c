@@ -454,6 +454,11 @@ void do_fd_request(void)
 	add_timer(ticks_to_floppy_on(current_drive),&floppy_on_interrupt);
 }
 
+// 软盘系统初始化。
+// 设置软盘块设备请求项的处理函数do_fd_request()，并设置软盘中断门（int 0x26，对应
+// 硬件中断请求信号IRQ6）。 然后取消对该中断信号的屏蔽，以允许软盘控制器FDC发送中
+// 断请求信号。中断描述符表IDT中陷阱门描述符设置宏set_trap_gate()定义在头文件
+// include/asm/system.h中。
 void floppy_init(void)
 {
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
