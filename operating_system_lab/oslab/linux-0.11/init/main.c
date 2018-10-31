@@ -211,11 +211,13 @@ void main(void)		/* This really IS void, no error here. */
 	tty_init();									// tty初始化。
 	time_init();								// 时间初始化，就设置了一下开机时间，函数在本文件上面
 	sched_init();								// 内核调度程序的初始化子程序。设置TSS LDT之类的
-	buffer_init(buffer_memory_end);				// 缓冲区初始化函数。
-	hd_init();
-	floppy_init();
-	sti();
-	move_to_user_mode();
+	buffer_init(buffer_memory_end);				// 缓冲区初始化函数。缓冲管理初始化，建内存链表等
+	hd_init();									// 硬盘初始化。
+	floppy_init();								// 软驱初始化。
+	sti();										// 所有初始化工作都做完了，开中断。
+
+	// 下面过程通过在堆栈中设置的参数，利用中断返回指令启动任务0执行。
+	move_to_user_mode();						// 移到用户模式下执行，不懂！！！
 	if (!fork()) {		/* we count on this going ok */
 		init();
 	}
