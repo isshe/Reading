@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 func main() {
-	r := string.NewReader("hello, Reader!")
+	r := strings.NewReader("hello, Reader!")
 
 	b := make([]byte, 8)
 	for {
