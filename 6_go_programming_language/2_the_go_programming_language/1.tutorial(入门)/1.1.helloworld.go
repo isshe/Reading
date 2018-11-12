@@ -1,4 +1,4 @@
-package __tutorial_入门_
+package main
 
 import "fmt"
 
